@@ -484,8 +484,8 @@ while [ $i -lt $count ]; do
         article_title=""
     fi
     # Write the file contents. Hold on to your butts...
-    echo "$json" | jq -r ".result.data[$i].attachments.content.content.raw" | cat <(echo -en "$article_title") - | dd status=none of="$destination"
     echo "Writing $destination"
+    echo "$json" | jq -r ".result.data[$i].attachments.content.content.raw" | cat <(echo -en "$article_title") - | dd status=none of="$destination"
     i=$((i+1))
 done
 exit 0
