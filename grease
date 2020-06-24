@@ -68,7 +68,7 @@ help () {
     text="$text\n    -o, --out <path>"
     text="$text\n        The destination directory for the output files. This directory must already exist in the filesystem or $scriptname will complain and quit."
     text="$text\n"
-    text="$text\n    --prefix"
+    text="$text\n    --prefix <path>"
     text="$text\n        A prefix to be added to the beginning of the search pattern. Use this if you want to retrieve all of the remarkup documents under another document."
     text="$text\n"
     text="$text\n    --"
