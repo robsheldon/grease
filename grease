@@ -1,0 +1,491 @@
+#!/bin/bash
+
+# Name of this script.
+scriptname=`basename $_`
+# And the path.
+scriptpath=$(readlink -m "$0")
+scriptdir=$(dirname "$scriptpath")
+
+# barf and exit if an undefined variable is referenced.
+set -u
+
+# restriced mode, make it harder to abuse this script.
+# http://tldp.org/LDP/abs/html/restricted-sh.html
+set -r
+
+# if any command in a pipeline fails, that return code will be used as the
+# return code of the whole pipeline.
+set -o pipefail
+
+# restrict newly created files to read/write by this user only.
+umask 077
+
+
+################################################################################
+#                                                                              #
+#   Functions                                                                  #
+#                                                                              #
+################################################################################
+
+warn () {
+    echo "$@" >&2
+}
+
+
+fail () {
+    # Echo an error message and exit with a non-zero status.
+    echo "Error: $1"
+    exit 1
+}
+
+
+help () {
+    local text="\033[1m$scriptname: \033[0m"
+    text="$text\n    Safely and easily retrieve remarkup documents stored in Phabricator."
+    text="$text\n"
+    text="$text\n\033[1mUSAGE\033[0m"
+    text="$text\n    $scriptname [options] <search pattern>"
+    text="$text\n"
+    text="$text\n\033[1mOPTIONS\033[0m"
+    text="$text\n    --api <path or url>"
+    text="$text\n        Specify a different API path. The default is \"/api/phriction.document.search\". You can also specify a complete url (with hostname and protocol) here; if no other hostname is provided, $scriptname will use curl to attempt to connect to the server in your api path."
+    text="$text\n"
+    text="$text\n    -c, --config <path>"
+    text="$text\n        Use the config file at <path>. $scriptname will use only this config file and not look for any others. Config files are loaded when no hostname or api key are given on the command line."
+    text="$text\n"
+    text="$text\n    -h, --host <hostname>"
+    text="$text\n        Connect to the Phabricator server at <hostname>."
+    text="$text\n"
+    text="$text\n    -?, --help"
+    text="$text\n        Print this help message. Sorry, -h was already taken."
+    text="$text\n"
+    text="$text\n    -k, --key <api token>"
+    text="$text\n        Your Phabricator API token. It's good practice to put this into a config file instead of the commandline, where it may end up in your shell history."
+    text="$text\n"
+    text="$text\n    --title <yes or no>"
+    text="$text\n        If yes, add the document title as a header to the top of each output file. Otherwise, leave the output file unchanged. This option is enabled by default."
+    text="$text\n"
+    text="$text\n    -o, --out <path>"
+    text="$text\n        The destination directory for the output files. This directory must already exist in the filesystem or $scriptname will complain and quit."
+    text="$text\n"
+    text="$text\n    --prefix"
+    text="$text\n        A prefix to be added to the beginning of the search pattern. Use this if you want to retrieve all of the remarkup documents under another document."
+    text="$text\n"
+    text="$text\n    --"
+    text="$text\n        Stop processing options. Use this if you have a really funky search pattern and you're sure you need it to start with a \"-\"."
+    text="$text\n"
+    text="$text\n\033[1mSEARCH PATTERNS\033[0m"
+    text="$text\n"
+    text="$text\n    Currently there are just two types of patterns supported: a single-document path and a wildcard (recursive) path."
+    text="$text\n"
+    text="$text\n    Single-document paths look like: /path/to/my/document. $scriptname will take care of minor adjustments to this path so Phabricator is less likely to complain. If the URL to your document looks like \"https://my.phabricator-server.com/w/readmes/how_to_tie_my_shoes/\", then your single-document path would be \"/readmes/how_to_tie_my_shoes/\"."
+    text="$text\n"
+    text="$text\n    Wildcard paths look like: /path/to/*. This will retrieve the single document at /path/to, as well as all of its child documents. The directory structure for the documents will be duplicated in the destination directory. Using the previous example, \"/readmes/*\" would retrieve all your readme documents."
+    text="$text\n"
+    text="$text\n    There is currently no support for regular expressions, globbing, or any other fancier behavior in the search patterns because it would be a bit hard. Also I have an existential fear that if I ever completely finish any project, it will be the very last thing I do on this earth."
+    text="$text\n"
+    text="$text\n\033[1mCONFIGURING\033[0m"
+    text="$text\n"
+    text="$text\n    $scriptname will first process all of the options provided on the commandline. If these are sufficient to attempt a connection, it will not look for any configuration files. The assumption here is that if a configuration file existed, you wouldn't bother specifying the hostname or api token on the command line."
+    text="$text\n"
+    text="$text\n    If you provided a path to a config file using the -c or --config option, then it will look there and only there for a config file and attempt to process it. Otherwise, it will look first for a config file called \".grease\" in your home directory, and then it will look in its own directory for a \"config\" subdirectory and a file in there called \"local\". Currently, this would be \"$scriptdir/config/local\". If either of these files gives it the parameters it needs to continue, then it'll get to work. If it's still missing a required parameter, it will try to tell you about it as well as any problems it might have encountered with these files."
+    text="$text\n"
+    text="$text\n    The format for these files is simple:"
+    text="$text\n        # You can add comments"
+    text="$text\n        hostname=your-server.com"
+    text="$text\n        api_key=your-api-token"
+    text="$text\n"
+    text="$text\n    You can add \"#!/bin/bash\" at the top to keep your code editor happy if you like. The config file loader will try to parse anything that looks like \"key=value\". It will ignore any keys it doesn't recognize and it will ignore any values that have already been given on the command line or in another config file, so the config file in your home directory can override a global config file in the application's directory."
+    text="$text\n"
+    text="$text\n    Valid keys are:"
+    text="$text\n        hostname"
+    text="$text\n        api_path"
+    text="$text\n        api_key"
+    text="$text\n        path_prefix"
+    text="$text\n        destination"
+    text="$text\n        title"
+    text="$text\n"
+    text="$text\n\033[1mMORE INFO\033[0m"
+    text="$text\n"
+    text="$text\n    More information is available at https://github.com/robsheldon/grease"
+    text="$text\n    If you get stuck or discover a bug, open an issue there."
+    text="$text\n"
+    text="$text\n\033[1mBUGS\033[0m"
+    text="$text\n"
+    text="$text\n    Probably."
+    text="$text\n"
+    echo -e "$text" | fmt -s -w 80 | less -rFX
+    exit 0
+}
+
+
+load_config () {
+    # http://unix.stackexchange.com/questions/175648/use-config-file-for-my-shell-script
+    # Look for a configuration file in a couple of places and fill in any missing
+    # values that weren't provided on the commandline. Commandline values will
+    # override the config files.
+    if [ -n "$config_file" ]; then
+        # Specifying a config file on the commandline overrides all other config files.
+        try_files=$(readlink -m "$config_file")
+    else
+        global_file="$scriptdir/config/local"
+        user_file=$(readlink -m "$HOME/.grease")
+        try_files="\"$user_file\" \"$global_file\""
+    fi
+    for try_file in $try_files; do
+        typeset -A config
+        local line
+        # Set defaults
+        config=(
+            [hostname]=""
+            [api_path]=""
+            [api_key]=""
+            [path_prefix]=""
+            [destination]=""
+            [title]=""
+        )
+        if [ ! -e "$try_file" ]; then
+            reason="$reason, and no config file was found at $try_file"
+            continue
+        elif [ ! -f "$try_file" ]; then
+            reason="$reason, and $try_file is not a regular file"
+            continue
+        elif [ ! -r "$try_file" ]; then
+            reason="$reason, and $try_file is not readable"
+            continue
+        else
+            reason="$reason. A config file was loaded at $try_file"
+        fi
+        # Read settings from configuration file
+        while read line || [ -n "$line" ]
+        do
+            # Ignore comment lines
+            if [[ "$line" =~ "^[[:space:]]#" ]]; then continue; fi
+            # Attempt to parse any other line containing a '='.
+            if [ `expr index "$line" "="` -gt 0 ]; then
+                value=$(echo "$line" | cut -d '=' -f 2-)
+                if [[ "$value" =~ ^\".*\"$ ]]; then
+                    # Quoted value. This needs to be unquoted.
+                    value=${value##\"}
+                    value=${value%%\"}
+                fi
+                config[$(echo "$line" | cut -d '=' -f 1)]="$value"
+            fi
+        done < "$try_file"
+        # Load settings from the configuration file into program globals.
+        if [ -z "$hostname" ]; then
+            hostname=${config[hostname]}
+        fi
+        if [ -z "$api_path" ]; then
+            api_path=${config[api_path]}
+        fi
+        if [ -z "$api_token" ]; then
+            api_token=${config[api_key]}
+        fi
+        if [ -z "$path_prefix" ]; then
+            path_prefix=${config[path_prefix]}
+        fi
+        if [ -z "$outdir" ]; then
+            outdir=${config[destination]}
+        fi
+        if [ -z "$title" ]; then
+            title=${config[title]}
+        fi
+    done
+}
+
+
+################################################################################
+#                                                                              #
+#   Initialization                                                             #
+#                                                                              #
+################################################################################
+
+# Make sure jq is installed.
+if [ -z "$(which jq)" ]; then
+    fail "jq is not installed. It is required for parsing JSON responses. See also https://stedolan.github.io/jq/"
+fi
+
+# Global config options
+hostname=""
+api_path=""
+api_token=""
+path_prefix=""
+outdir=""
+config_file=""
+title=""
+
+# Process arguments.
+while [ $# -gt 0 ]; do
+    if [[ ! "$1" =~ ^- ]]; then
+        # Assume this is a positional argument.
+        break
+    fi
+    option="$1"
+    shift
+    case "$option" in
+        --api)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing api path after $option; use --help for help"
+            fi
+            api_path="$1"
+            shift
+        ;;
+
+        -c|--config)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing config file path after $option; use --help for help"
+            fi
+            config_file="$1"
+            shift
+        ;;
+
+        -h|--host)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing hostname after $option; use --help for help"
+            fi
+            hostname="$1"
+            shift
+        ;;
+
+        -\?|--help)
+            help
+        ;;
+
+        -k|--key)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing api key after $option; use --help for help"
+            fi
+            api_token="$1"
+            shift
+        ;;
+
+        --title)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing yes/no after $option; use --help for help"
+            fi
+            if [ "$1" != "yes" -a "$1" != "no" ]; then
+                fail "Invalid value after $option; valid values are \"yes\" and \"no\"; use --help for help"
+            fi
+            title="$1"
+            shift
+        ;;
+
+        -o|--out)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing output destination after $option; use --help for help"
+            fi
+            outdir="$1"
+            shift
+        ;;
+
+        --prefix)
+            if [[ $# -lt 1 || "$1" =~ ^- ]]; then
+                fail "Missing path prefix after $option; use --help for help"
+            fi
+            path_prefix="$1"
+            shift
+        ;;
+
+        --)
+            # Stop processing options.
+            break
+        ;;
+
+        -*)
+            warn "Unrecognized option: $1; use --help for help"
+        ;;
+    esac
+done
+
+# If any of the required options are missing, go hunting for config files. If
+# all of the required options have been provided on the commandline, don't load
+# any config files.
+reason=""
+if [ -z "$hostname" -a -z "$api_path" ]; then
+    reason="No hostname was provided"
+    load_config
+elif [ -z "$api_token" ]; then
+    reason="No api key was provided"
+    load_config
+fi
+# Have to recheck both of these after attempting to load config files.
+if [ -n "$reason" ]; then
+    if [ -z "$hostname" -a -z "$api_path" ]; then
+        fail "$reason. Use --help for help"
+    fi
+    if [ -z "$api_token" ]; then
+        fail "$reason; the api key is still missing. Use --help for help"
+    fi
+    # Good, the missing parameters were found in a config file.
+    reason=""
+fi
+
+# It's okay to not specify an output directory, it will default to the current
+# working directory.
+if [ -z "$outdir" ]; then
+    outdir="."
+fi
+
+# It's expected to not provide an api path, but the user can override it if
+# needed for some reason.
+# The user can specify a complete scheme, hostname, and path in api_path,
+# in case they're using a tunnel or something.
+if [ -z "$api_path" ]; then
+    api_path="https://${hostname}/api/phriction.document.search"
+elif [ -n "$hostname" ]; then
+    api_path="https://${hostname}${api_path}"
+fi
+
+# Article titles are added to the output by default.
+if [ -z "$title" ]; then
+    title="yes"
+fi
+
+if [ "$#" -lt 1 ]; then
+    fail "No search path given. Use --help for help"
+fi
+search_path="$1"
+
+# Validate the output directory before continuing.
+outdir=$(readlink -m "$outdir")
+if [ -z "$outdir" -o "${outdir:0:1}" != "/" ]; then
+    fail "Could not resolve \"$outdir\" to a sensible path"
+fi
+if [ ! -e "$outdir" ]; then
+    fail "Destination directory does not exist: $outdir"
+fi
+if [ ! -d "$outdir" ]; then
+    fail "Destination exists but is not a directory: $outdir"
+fi
+if [ ! -w "$outdir" ]; then
+    fail "Destination directory is not writable: $outdir"
+fi
+# Also refuse to proceed if the destination looks like "/dev/..."
+if [[ "$outdir" =~ ^/dev/ ]]; then
+    fail "Cravenly refusing to write to anything under /dev !"
+fi
+
+# Set up the API constraints parameter according to the path provided by the user.
+recursive_search=0
+if [[ "$search_path" =~ \*$ ]]; then
+    recursive_search=1
+    path_constraint="constraints[ancestorPaths][0]"
+    search_path=${search_path%\*}
+else
+    path_constraint="constraints[paths][0]"
+fi
+# Phabricator requires that the search path end in a /
+if [[ ! "$search_path" =~ /$ ]]; then
+    search_path="$search_path/"
+fi
+# The path prefix and the search path get concatenated together, so:
+if [[ ! "$search_path" =~ ^/ ]]; then
+    search_path="/$search_path"
+fi
+while [[ "$path_prefix" =~ /$ ]]; do
+    path_prefix=${path_prefix%"/"}
+done
+search_path="${path_prefix}${search_path}"
+# Phabricator doesn't want a leading / in the search path.
+search_path=${search_path##/}
+# The user may not realize that Phabricator also doesn't want the leading
+# "w/..." in the path constraint.
+search_path=${search_path##w/}
+# The Phabricator API complains, unfortunately, if the path is quoted. Sigh.
+path_constraint="$path_constraint=${search_path}"
+
+
+################################################################################
+#                                                                              #
+#   Main program                                                               #
+#                                                                              #
+################################################################################
+
+# Send out the curl request and check for an error.
+response=$(curl "$api_path" -d api.token="$api_token" -d queryKey=active -d constraints[statuses][0]=active -d $path_constraint -d attachments[content]=1 --ssl --silent --fail --show-error --stderr -)
+exit_code=$?
+if [ $exit_code -ne 0 ]; then
+    echo "curl request failed with an error:"
+    fail "($exit_code) $response"
+fi
+
+# See if we got valid JSON back.
+json=$(echo "$response" | jq -e '.')
+exit_code=$?
+if [ $exit_code -eq 4 ]; then
+    fail "jq says the server did not reply with valid JSON. The server said:\n$response"
+elif [ $exit_code -eq 2 -o $exit_code -eq 3 ]; then
+    fail "jq failed with an internal error. Exit code was $exit_code"
+elif [ $exit_code -eq 1 ]; then
+    fail "server replied with just false/null/0"
+elif [ $exit_code -ne 0 ]; then
+    fail "jq had an unexpected exit code: $exit_code"
+fi
+
+# Check for errors in the response.
+error_code=$(echo "$json" | jq -r '.error_code')
+error_info=$(echo "$json" | jq -r '.error_info')
+if [ "$error_code" != "null" -o "$error_info" != "null" ]; then
+    echo "Server replied with error:"
+    fail "($error_code) $error_info"
+fi
+
+# Get the number of results in the response.
+count=$(echo "$json" | jq -r '.result.data | length')
+if [ $count -eq 0 ]; then
+    fail "no matching results"
+fi
+
+# Iterate over each response item.
+i=0
+while [ $i -lt $count ]; do
+    # Retrieve the path to the remote document, it's going to become the path
+    # for the local document.
+    filename=$(echo "$json" | jq -r ".result.data[$i].attachments.content.path")
+    # Drop the leading path prefix.
+    destination=${filename##$search_path}
+    # Replace the trailing / with a ".md"
+    destination=${destination/%\//.md}
+    # Add the leading path to the destination (output) directory.
+    destination="${outdir}/${destination}"
+    # Normalize the path.
+    destination=$(readlink -m "$destination")
+    # Do a few more sanity checks on the destination filename before calling
+    # dd. The checks are performed for every single destination filename here
+    # juuuuust in case a phabricator path somehow contains something funky.
+    #
+    # Make sure the destination file is in the output directory.
+    if [[ ! "$destination" =~ ^"$outdir" ]]; then
+        fail "Something is wrong with this filename, it escaped from the output directory: $filename"
+    fi
+    # Create and sanity-check output subdirectories as needed.
+    directory=$(dirname "$destination")
+    if [ -e "$directory" ]; then
+        if [ ! -d "$directory" ]; then
+            fail "\"$directory\" exists but is not a directory"
+        fi
+    elif ! mkdir -p "$directory"; then
+        # Create any directory levels that need to be created for this file.
+        fail "Could not create output directory at $directory"
+    elif [ ! -d "$directory" ]; then
+        fail "Tried creating output directory at $directory but it still doesn't exist"
+    fi
+    if [ ! -w "$directory" ]; then
+        fail "Output directory at $directory exists but is not writable"
+    fi
+    if [ -e "$destination" -a ! -f "$destination" ]; then
+        fail "Output file $destination already exists and isn't a regular file"
+    fi
+    if [ "$title" = "yes" ]; then
+        article_title=$(echo "$json" | jq -r ".result.data[$i].attachments.content.title")
+        article_title="# $article_title\n\n"
+    else
+        article_title=""
+    fi
+    # Write the file contents. Hold on to your butts...
+    echo "$json" | jq -r ".result.data[$i].attachments.content.content.raw" | cat <(echo -en "$article_title") - | dd status=none of="$destination"
+    echo "Writing $destination"
+    i=$((i+1))
+done
+exit 0
