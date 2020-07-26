@@ -130,7 +130,7 @@ load_config () {
     else
         global_file="$scriptdir/config/local"
         user_file=$(readlink -m "$HOME/.grease")
-        try_files="\"$user_file\" \"$global_file\""
+        try_files=("$user_file" "$global_file")
     fi
     for try_file in $try_files; do
         typeset -A config
@@ -435,6 +435,12 @@ fi
 count=$(echo "$json" | jq -r '.result.data | length')
 if [ $count -eq 0 ]; then
     fail "no matching results"
+fi
+
+# The search path needs to be adjusted if this isn't a recursive search,
+# otherwise the output filename doesn't get computed correctly.
+if [ $recursive_search -eq 0 ]; then
+    search_path=$(dirname "$search_path")/
 fi
 
 # Iterate over each response item.

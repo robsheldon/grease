@@ -88,6 +88,10 @@ If there's no hostname or no api key specified and no `-c` for a custom config f
 I've been troubleshooting computery stuff for over three decades now. There are few things that crack my chill more than programs with useless, vague, or obtuse error messages. Grease tries to provide helpful error messages if something goes wrong and it exits with a non-zero status if it prints an error message, so you can safely do things like, `grease "essays/*" && deploy ...`.
 
 
+## Helpful Tips
+
+Perl can help translate Phabricator's `lang=...` blockquote syntax into the syntax that is expected by other Markdown software: `perl -0777 -i.original -pe 's/```\nlang=/```/igs' <path-to-your-file.md>`
+
 ## Contributing
 
 Find a bug? Want to add a feature? Just [open an issue](https://github.com/robsheldon/grease/issues) or send a pull request.
