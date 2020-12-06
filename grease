@@ -65,6 +65,9 @@ help () {
     text="$text\n    --title <yes or no>"
     text="$text\n        If yes, add the document title as a header to the top of each output file. Otherwise, leave the output file unchanged. This option is enabled by default."
     text="$text\n"
+    text="$text\n    -n, --do-not-fix"
+    text="$text\n        Do not modify the formatting in the output. By default, some Phabricator-specific markdown will be modified to match a simpler version of markdown that's more suitable for use in other applications."
+    text="$text\n"
     text="$text\n    -o, --out <path>"
     text="$text\n        The destination directory for the output files. This directory must already exist in the filesystem or $scriptname will complain and quit."
     text="$text\n"
@@ -214,6 +217,7 @@ path_prefix=""
 outdir=""
 config_file=""
 title=""
+nofix=0
 
 # Process arguments.
 while [ $# -gt 0 ]; do
@@ -268,6 +272,11 @@ while [ $# -gt 0 ]; do
                 fail "Invalid value after $option; valid values are \"yes\" and \"no\"; use --help for help"
             fi
             title="$1"
+            shift
+        ;;
+
+        -n|--do-not-fix)
+            nofix=1
             shift
         ;;
 
@@ -443,6 +452,15 @@ if [ $recursive_search -eq 0 ]; then
     search_path=$(dirname "$search_path")/
 fi
 
+# Set up the sed script(s) to replace Phabricator-specific markdown with a more
+# generic flavor of markdown.
+if [ $nofix -eq 0 ]; then
+    # This line has no business working, but it does. I hate it.
+    rewrite='sed -e 1h;2,$H;$!d;g -e s/```\nlang=bash[^\n]*/```bash/g'
+else
+    rewrite='cat -'
+fi
+
 # Iterate over each response item.
 i=0
 while [ $i -lt $count ]; do
@@ -491,7 +509,7 @@ while [ $i -lt $count ]; do
     fi
     # Write the file contents. Hold on to your butts...
     echo "Writing $destination"
-    echo "$json" | jq -r ".result.data[$i].attachments.content.content.raw" | cat <(echo -en "$article_title") - | dd status=none of="$destination"
+    echo "$json" | jq -r ".result.data[$i].attachments.content.content.raw" | cat <(echo -en "$article_title") - | $rewrite | dd status=none of="$destination"
     i=$((i+1))
 done
 exit 0
